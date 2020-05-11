@@ -122,10 +122,10 @@ class TrapumUploader(object):
                     BeamformerConfiguration.centre_frequency == bf_params['centre_frequency'],
                     BeamformerConfiguration.bandwidth == bf_params['bandwidth'],
                     BeamformerConfiguration.incoherent_nchans == bf_params['incoherent_nchans'],
-                    func.abs(BeamformerConfiguration.incoherent_tsamp - bf_params['incoherent_tsamp']) < FLOAT_DIFF
+                    func.abs(BeamformerConfiguration.incoherent_tsamp - bf_params['incoherent_tsamp']) < FLOAT_DIFF,
                     BeamformerConfiguration.incoherent_antennas.ilike(bf_params['incoherent_antennas']),
                     BeamformerConfiguration.coherent_nchans == bf_params['coherent_nchans'],
-                    func.abs(BeamformerConfiguration.coherent_tsamp - bf_params['coherent_tsamp']) < FLOAT_DIFF
+                    func.abs(BeamformerConfiguration.coherent_tsamp - bf_params['coherent_tsamp']) < FLOAT_DIFF,
                     BeamformerConfiguration.coherent_antennas.ilike(bf_params['coherent_antennas']),
                     BeamformerConfiguration.configuration_authority.ilike(bf_params['configuration_authority']),
                     BeamformerConfiguration.receiver.ilike(bf_params['receiver']),
