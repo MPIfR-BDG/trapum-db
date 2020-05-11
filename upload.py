@@ -8,7 +8,7 @@ import time
 import datetime
 from functools import wraps
 from contextlib import contextmanager
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, func
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 from trapum_db import (
@@ -18,6 +18,7 @@ from header_util import parseSigprocHeader, updateHeader
 
 log = logging.getLogger('trapum_db.upload')
 
+FLOAT_DIFF = 1e-10
 
 def parse_katpoint_string(kptarget):
     names, _, ra, dec = kptarget.split(",")
@@ -121,10 +122,10 @@ class TrapumUploader(object):
                     BeamformerConfiguration.centre_frequency == bf_params['centre_frequency'],
                     BeamformerConfiguration.bandwidth == bf_params['bandwidth'],
                     BeamformerConfiguration.incoherent_nchans == bf_params['incoherent_nchans'],
-                    BeamformerConfiguration.incoherent_tsamp == bf_params['incoherent_tsamp'],
+                    func.abs(BeamformerConfiguration.incoherent_tsamp - bf_params['incoherent_tsamp']) < FLOAT_DIFF
                     BeamformerConfiguration.incoherent_antennas.ilike(bf_params['incoherent_antennas']),
                     BeamformerConfiguration.coherent_nchans == bf_params['coherent_nchans'],
-                    BeamformerConfiguration.coherent_tsamp == bf_params['coherent_tsamp'],
+                    func.abs(BeamformerConfiguration.coherent_tsamp - bf_params['coherent_tsamp']) < FLOAT_DIFF
                     BeamformerConfiguration.coherent_antennas.ilike(bf_params['coherent_antennas']),
                     BeamformerConfiguration.configuration_authority.ilike(bf_params['configuration_authority']),
                     BeamformerConfiguration.receiver.ilike(bf_params['receiver']),
@@ -175,8 +176,8 @@ class TrapumUploader(object):
                     Pointing.target_id == target_id,
                     Pointing.bf_config_id == bf_config_id,
                     Pointing.utc_start == utc_start,
-                    Pointing.sb_id.like(metadata['sb_id']),
-                    Pointing.mkat_pid.like(metadata['project_name'])
+                    Pointing.sb_id.ilike(metadata['sb_id']),
+                    Pointing.mkat_pid.ilike(metadata['project_name'])
                 ).scalar()
             if not pointing_id:
                 pointing = Pointing(**pointing_params)
@@ -231,7 +232,7 @@ class TrapumUploader(object):
         xx = xxhash.xxh64()
         with open(filepath, 'rb') as f:
             xx.update(f.read(10000))
-            xx.update(b'{}'.format(os.path.getsize(filepath)))
+            xx.update('{}'.format(os.path.getsize(filepath)))
         return xx.hexdigest()
 
     @Timer.track
@@ -243,8 +244,8 @@ class TrapumUploader(object):
                     DataProduct.pointing_id == pointing_id,
                     DataProduct.beam_id == beam_id,
                     DataProduct.file_type_id == file_type_id,
-                    DataProduct.filename.like(filename),
-                    DataProduct.filepath.like(filepath)
+                    DataProduct.filename.ilike(filename),
+                    DataProduct.filepath.ilike(filepath)
                 ).scalar()
             if not dp_id:
                 dp = DataProduct(
@@ -257,7 +258,9 @@ class TrapumUploader(object):
                     filehash=self._generate_filehash(
                         os.path.join(filepath, filename)),
                     available=True,
-                    locked=True
+                    locked=True,
+                    upload_date=datetime.datetime.utcnow(),
+                    modification_date=datetime.datetime.utcnow()
                     )
                 session.add(dp)
                 session.flush()
@@ -333,7 +336,7 @@ class TrapumUploader(object):
             else:
                 file_type_id = ib_filetype_id
 
-            log.info("Finding associated filterbank files under ".format(filepath))
+            log.info("Finding associated filterbank files under {}".format(filepath))
             filterbanks = glob.glob('{}/*.fil'.format(filepath))
             log.info("Found {} files".format(len(filterbanks)))
             for filterbank in filterbanks:
