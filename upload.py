@@ -339,7 +339,6 @@ class TrapumUploader(object):
             for filterbank in filterbanks:
                 log.info("Handing file: {}".format(filterbank))
                 filename = os.path.basename(filterbank)
-                log.info()
                 if not self._validate_header(filterbank):
                     continue
                 dp_id = self._get_dp_id(

@@ -262,17 +262,17 @@ def parseSigprocHeader(filename):
     while True:
         keylen = unpack(b"I", f.read(4))[0]
         key = f.read(keylen).decode("utf-8")
-        if key not in conf.header_keys:
+        if key not in header_keys:
             print("'%s' not recognised header key") % (key)
             return None
 
-        if conf.header_keys[key] == "str":
+        if header_keys[key] == "str":
             header[key] = _read_string(f)
-        elif conf.header_keys[key] == "I":
+        elif header_keys[key] == "I":
             header[key] = _read_int(f)
-        elif conf.header_keys[key] == "b":
+        elif header_keys[key] == "b":
             header[key] = _read_char(f)
-        elif conf.header_keys[key] == "d":
+        elif header_keys[key] == "d":
             header[key] = _read_double(f)
         if key == "HEADER_END":
             break
@@ -437,5 +437,5 @@ def updateHeader(header):
     if "tstart" in header:
         header["obs_date"], header["obs_time"] = MJD_to_Gregorian(header["tstart"])
     if "nbits" in header:
-        header["dtype"] = conf.nbits_to_dtype[header["nbits"]]
+        header["dtype"] = nbits_to_dtype[header["nbits"]]
     return header
