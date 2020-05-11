@@ -12,7 +12,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 from trapum_db import (
-    BeamformerConfig, Target, Pointing,
+    BeamformerConfiguration, Target, Pointing,
     Beam, DataProduct, FileType)
 from header_util import parseSigprocHeader, updateHeader
 
@@ -115,23 +115,23 @@ class TrapumUploader(object):
             )
         with self.session() as session:
             bf_config_id = session.query(
-                    BeamformerConfig.id
+                    BeamformerConfiguration.id
                 ).filter(
-                    BeamformerConfig.centre_frequency == bf_params['centre_frequency'],
-                    BeamformerConfig.bandwidth == bf_params['bandwidth'],
-                    BeamformerConfig.incoherent_nchans == bf_params['incoherent_nchans'],
-                    BeamformerConfig.incoherent_tsamp == bf_params['incoherent_tsamp'],
-                    BeamformerConfig.incoherent_antennas.ilike(bf_params['incoherent_antennas']),
-                    BeamformerConfig.coherent_nchans == bf_params['coherent_nchans'],
-                    BeamformerConfig.coherent_tsamp == bf_params['coherent_tsamp'],
-                    BeamformerConfig.coherent_antennas.ilike(bf_params['coherent_antennas']),
-                    BeamformerConfig.configuration_authority.ilike(bf_params['configuration_authority']),
-                    BeamformerConfig.receiver.ilike(bf_params['receiver']),
-                    BeamformerConfig.metainfo.ilike(bf_params['metadata'])
+                    BeamformerConfiguration.centre_frequency == bf_params['centre_frequency'],
+                    BeamformerConfiguration.bandwidth == bf_params['bandwidth'],
+                    BeamformerConfiguration.incoherent_nchans == bf_params['incoherent_nchans'],
+                    BeamformerConfiguration.incoherent_tsamp == bf_params['incoherent_tsamp'],
+                    BeamformerConfiguration.incoherent_antennas.ilike(bf_params['incoherent_antennas']),
+                    BeamformerConfiguration.coherent_nchans == bf_params['coherent_nchans'],
+                    BeamformerConfiguration.coherent_tsamp == bf_params['coherent_tsamp'],
+                    BeamformerConfiguration.coherent_antennas.ilike(bf_params['coherent_antennas']),
+                    BeamformerConfiguration.configuration_authority.ilike(bf_params['configuration_authority']),
+                    BeamformerConfiguration.receiver.ilike(bf_params['receiver']),
+                    BeamformerConfiguration.metainfo.ilike(bf_params['metadata'])
                 ).scalar()
 
             if not bf_config_id:
-                bf_config = BeamformerConfig(**bf_params)
+                bf_config = BeamformerConfiguration(**bf_params)
                 session.add(bf_config)
                 session.flush()
                 bf_config_id = bf_config.id
