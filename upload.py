@@ -82,9 +82,10 @@ class Timer(object):
 
 class TrapumUploader(object):
     def __init__(self, database):
-        self._session_engine = create_engine(database, echo=False)
+        self._session_engine = create_engine(database,
+            echo=False, poolclass=NullPool)
         self._session_factory = sessionmaker(
-            bind=self._session_engine, poolclass=NullPool)
+            bind=self._session_engine)
 
     @contextmanager
     def session(self):
@@ -127,7 +128,7 @@ class TrapumUploader(object):
                     BeamformerConfiguration.coherent_antennas.ilike(bf_params['coherent_antennas']),
                     BeamformerConfiguration.configuration_authority.ilike(bf_params['configuration_authority']),
                     BeamformerConfiguration.receiver.ilike(bf_params['receiver']),
-                    BeamformerConfiguration.metainfo.ilike(bf_params['metadata'])
+                    BeamformerConfiguration.metainfo.ilike(bf_params['metainfo'])
                 ).scalar()
 
             if not bf_config_id:
@@ -164,7 +165,8 @@ class TrapumUploader(object):
             target_id=target_id,
             bf_config_id=bf_config_id,
             utc_start=utc_start,
-            sb_id=metadata['sb_id']
+            sb_id=metadata['sb_id'],
+            mkat_pid=metadata['project_name']
             )
         with self.session() as session:
             pointing_id = session.query(
@@ -341,6 +343,6 @@ if __name__ == "__main__":
     parser.add_option('--db', type=str, help="SQLA DB connection string", dest="db")
     parser.add_option('--log_level', type=str, help="Logging level", dest="log", default="info")
     opts, args = parser.parse_args()
-    log.setLevel(opts.log)
+    log.setLevel(opts.log.upper())
     uploader = TrapumUploader(opts.db)
     uploader.scrape_directory(opts.pd)
