@@ -269,7 +269,8 @@ class TrapumUploader(object):
         try:
             header = parseSigprocHeader(filterbank)
             header = updateHeader(header)
-        except:
+        except Exception as error:
+            log.exception(str(error))
             return False
         else:
             return True
@@ -280,13 +281,17 @@ class TrapumUploader(object):
         if not os.path.isfile(metafile):
             log.error('No meta file found in {}'.format(path))
             raise NoMetaFileException
+        else:
+            log.info("Found metafile: {}".format(metafile))
         metadata = read_apsuse_metafile(metafile)
+        log.debug(metadata)
 
         # Note the beam list is a complete dump of all possible beams
         # not of the beams that are actually recorded
         beams = sorted(list(metadata['beams'].keys()))
         valid_beams = [beam for beam in beams if os.path.isdir(
             os.path.join(path, beam))]
+        log.info("Found valid paths for {} beams".format(len(valid_beams)))
         bf_config_id = self._get_bf_config_id(metadata)
 
         target_ids = {}
@@ -296,13 +301,15 @@ class TrapumUploader(object):
             metadata['coherent_nchans'],
             int(metadata['coherent_tsamp']*1e6))
         cb_filetype_id = self._get_file_type_id(cb_filetype)
-
+        log.info("CB file type: {}".format(cb_filetype))
         ib_filetype = "filterbank-raw-{}-{}us-0dm".format(
             metadata['incoherent_nchans'],
             int(metadata['incoherent_tsamp']*1e6))
+        log.info("IB file type: {}".format(ib_filetype))
         ib_filetype_id = self._get_file_type_id(ib_filetype)
 
         for beamname in valid_beams:
+            log.info("Handling beam: {}".format(beamname))
             filepath = os.path.join(path, beamname)
             target_str = metadata['beams'][beamname]
             if target_str in target_ids.keys():
@@ -310,29 +317,35 @@ class TrapumUploader(object):
             else:
                 target_id = self._get_target_id(target_str)
                 target_ids[target_str] = target_id
-
+            log.info("Target ID: {}".format(target_id))
             if target_str in pointing_ids.keys():
                 pointing_id = pointing_ids[target_str]
             else:
                 pointing_id = self._get_pointing_id(
                     target_id, bf_config_id, metadata)
                 pointing_ids[target_str] = pointing_id
+            log.info("Pointing ID: {}".format(pointing_id))
             beam_id = self._get_beam_id(target_str, beamname, pointing_id)
+            log.info("Beam ID: {}".format(beam_id))
             coherent = "cfbf" in beamname
             if coherent:
                 file_type_id = cb_filetype_id
             else:
                 file_type_id = ib_filetype_id
 
+            log.info("Finding associated filterbank files under ".format(filepath))
             filterbanks = glob.glob('{}/*.fil'.format(filepath))
-
+            log.info("Found {} files".format(len(filterbanks)))
             for filterbank in filterbanks:
+                log.info("Handing file: {}".format(filterbank))
                 filename = os.path.basename(filterbank)
+                log.info()
                 if not self._validate_header(filterbank):
                     continue
                 dp_id = self._get_dp_id(
                     pointing_id, beam_id, file_type_id,
                     filepath, filename)
+                log.info("Uploaded data product ID: {}".format(dp_id))
 
 
 if __name__ == "__main__":
