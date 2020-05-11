@@ -345,4 +345,4 @@ if __name__ == "__main__":
     opts, args = parser.parse_args()
     log.setLevel(opts.log.upper())
     uploader = TrapumUploader(opts.db)
-    uploader.scrape_directory(opts.pd)
+    uploader.scrape_directory(opts.path)
