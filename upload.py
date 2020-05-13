@@ -354,15 +354,13 @@ class TrapumUploader(object):
                 try:
                     header = parseSigprocHeader(filterbank)
                     header = updateHeader(header)
-                    self._validate_header(header, bf_config)
+                    #self._validate_header(header, bf_config)
                 except Exception as error:
                     log.exception("Failed to parse header for {}".format(filterbank))
                     continue
                 else:
                     duration += header["tobs"]
 
-                if not self._validate_header(filterbank):
-                    continue
                 dp_id = self._get_dp_id(
                     pointing_id, beam_id, file_type_id,
                     filepath, filename)
