@@ -385,4 +385,3 @@ if __name__ == "__main__":
     log.setLevel(opts.log.upper())
     uploader = TrapumUploader(opts.db)
     uploader.scrape_directory(opts.path)
-    pr
