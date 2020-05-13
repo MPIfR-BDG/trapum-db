@@ -20,6 +20,7 @@ log = logging.getLogger('trapum_db.upload')
 
 FLOAT_DIFF = 1e-10
 
+
 def parse_katpoint_string(kptarget):
     names, _, ra, dec = kptarget.split(",")
     primary_name = names.split("|")[0]
@@ -75,9 +76,9 @@ class Timer(object):
 
     @staticmethod
     def summary():
-        for func, tracker in Timer.trackers.items():
+        for f, tracker in Timer.trackers.items():
             print("Func: {}, Called: {}, Total: {} s, Avg: {} s".format(
-                func, tracker.count, tracker.elapsed,
+                f, tracker.count, tracker.elapsed,
                 tracker.elapsed/tracker.count))
 
 
@@ -137,7 +138,9 @@ class TrapumUploader(object):
                 session.add(bf_config)
                 session.flush()
                 bf_config_id = bf_config.id
-        return bf_config_id
+        with self.session() as session:
+            bf_config = session.query(BeamformerConfiguration).get(bf_config_id)
+        return bf_config_id, bf_config
 
     @Timer.track
     def _get_target_id(self, kptarget):
@@ -162,12 +165,18 @@ class TrapumUploader(object):
     @Timer.track
     def _get_pointing_id(self, target_id, bf_config_id, metadata):
         utc_start = datetime.datetime.strptime(metadata['utc_start'], '%Y/%m/%d %H:%M:%S')
+
+        beam_shape = metadata.get("beamshape", None)
+        if beam_shape:
+            beam_shape = json.loads(beam_shape)
+
         pointing_params = dict(
             target_id=target_id,
             bf_config_id=bf_config_id,
             utc_start=utc_start,
             sb_id=metadata['sb_id'],
-            mkat_pid=metadata['project_name']
+            mkat_pid=metadata['project_name'],
+            beam_shape=beam_shape
             )
         with self.session() as session:
             pointing_id = session.query(
@@ -268,15 +277,13 @@ class TrapumUploader(object):
         return dp_id
 
     @Timer.track
-    def _validate_header(self, filterbank):
-        try:
-            header = parseSigprocHeader(filterbank)
-            header = updateHeader(header)
-        except Exception as error:
-            log.exception(str(error))
-            return False
+    def _validate_header(self, header, bf_config, coherent):
+        if coherent:
+            assert header["tsamp"] == bf_config.coherent_tsamp
+            assert header["nchans"] == bf_config.coherent_nchans
         else:
-            return True
+            assert header["tsamp"] == bf_config.incoherent_tsamp
+            assert header["nchans"] == bf_config.incoherent_nchans
 
     @Timer.track
     def scrape_directory(self, path):
@@ -295,7 +302,7 @@ class TrapumUploader(object):
         valid_beams = [beam for beam in beams if os.path.isdir(
             os.path.join(path, beam))]
         log.info("Found valid paths for {} beams".format(len(valid_beams)))
-        bf_config_id = self._get_bf_config_id(metadata)
+        bf_config_id, bf_config = self._get_bf_config_id(metadata)
 
         target_ids = {}
         pointing_ids = {}
@@ -339,16 +346,35 @@ class TrapumUploader(object):
             log.info("Finding associated filterbank files under {}".format(filepath))
             filterbanks = glob.glob('{}/*.fil'.format(filepath))
             log.info("Found {} files".format(len(filterbanks)))
+            duration = 0.0
             for filterbank in filterbanks:
                 log.info("Handing file: {}".format(filterbank))
                 filename = os.path.basename(filterbank)
+
+                try:
+                    header = parseSigprocHeader(filterbank)
+                    header = updateHeader(header)
+                    self._validate_header(header, bf_config)
+                except Exception as error:
+                    log.exception("Failed to parse header for {}".format(filterbank))
+                    continue
+                else:
+                    duration += header["tobs"]
+
                 if not self._validate_header(filterbank):
                     continue
                 dp_id = self._get_dp_id(
                     pointing_id, beam_id, file_type_id,
                     filepath, filename)
                 log.info("Uploaded data product ID: {}".format(dp_id))
-
+            with self.session() as session:
+                session.query(
+                        Pointing
+                    ).filter_by(
+                        id=pointing_id
+                    ).update(
+                        {Pointing.observation_length: duration}
+                    )
 
 if __name__ == "__main__":
     FORMAT = "[%(levelname)s - %(asctime)s - %(filename)s:%(lineno)s] %(message)s"
@@ -361,3 +387,4 @@ if __name__ == "__main__":
     log.setLevel(opts.log.upper())
     uploader = TrapumUploader(opts.db)
     uploader.scrape_directory(opts.path)
+    pr
