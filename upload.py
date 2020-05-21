@@ -167,9 +167,6 @@ class TrapumUploader(object):
         utc_start = datetime.datetime.strptime(metadata['utc_start'], '%Y/%m/%d %H:%M:%S')
 
         beam_shape = metadata.get("beamshape", None)
-        if beam_shape:
-            beam_shape = json.loads(beam_shape)
-
         pointing_params = dict(
             target_id=target_id,
             bf_config_id=bf_config_id,
