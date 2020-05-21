@@ -17,7 +17,7 @@ from trapum_db import (
 from header_util import parseSigprocHeader, updateHeader
 
 log = logging.getLogger('trapum_db.upload')
-
+META_KEYS = ['barycentric', 'source_name', 'nbits', 'nchans', 'fch1', 'foff', 'tstart', 'tsamp', 'nsamples', 'ra', 'dec']
 FLOAT_DIFF = 1e-10
 
 
@@ -245,7 +245,7 @@ class TrapumUploader(object):
         return xx.hexdigest()
 
     @Timer.track
-    def _get_dp_id(self, pointing_id, beam_id, file_type_id, filepath, filename):
+    def _get_dp_id(self, pointing_id, beam_id, file_type_id, filepath, filename, metainfo):
         with self.session() as session:
             dp_id = session.query(
                     DataProduct.id
@@ -268,6 +268,7 @@ class TrapumUploader(object):
                         os.path.join(filepath, filename)),
                     available=True,
                     locked=True,
+                    metainfo=metainfo,
                     upload_date=datetime.datetime.utcnow(),
                     modification_date=datetime.datetime.utcnow()
                     )
@@ -360,10 +361,10 @@ class TrapumUploader(object):
                     continue
                 else:
                     duration += header["tobs"]
-
+                metainfo = {key: value for key, value in header.items() if key in META_KEYS}
                 dp_id = self._get_dp_id(
                     pointing_id, beam_id, file_type_id,
-                    filepath, filename)
+                    filepath, filename, json.dumps(metainfo))
                 log.info("Uploaded data product ID: {}".format(dp_id))
             with self.session() as session:
                 session.query(

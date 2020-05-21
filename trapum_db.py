@@ -230,6 +230,7 @@ class DataProduct(Base):
     filehash = Column(String(100))
     available = Column(TINYINT(1), nullable=False)
     locked = Column(TINYINT(1), nullable=False)
+    metainfo = Column(Text)
     upload_date = Column(DateTime, nullable=False)
     modification_date = Column(DateTime, nullable=False)
 
