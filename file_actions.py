@@ -4,10 +4,10 @@ import time
 import datetime
 from functools import wraps
 from contextlib import contextmanager
-from sqlalchemy import create_engine, func
+from sqlalchemy import create_engine, func, asc
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
-from trapum_db import FileAction, FileActionRequest
+from trapum_db import FileAction, FileActionRequest, DataProduct
 
 log = logging.getLogger('trapum_db.file_actions')
 
@@ -73,21 +73,22 @@ class TrapumFileActions(object):
     def handle_requests(self, valid_actions=None):
         with self.session() as session:
             query = session.query(
-                    FileActionRequest
+                    FileActionRequest,
+                    FileAction,
+                    DataProduct
                 ).join(
                     FileAction
-                ).add_columns(
-                    FileAction.action,
-                    FileAction.is_destructive
+                ).join(
+                    DataProduct
                 )
             if valid_actions:
                 query = query.filter(
                     FileAction.action.in_(valid_actions)
                 )
             requests = query.filter(
-                    FileAction.success.is_(None)
+                    FileActionRequest.completed_at.is_(None)
                 ).order_by(
-                    func.asc(FileActionRequest.requested_at)
+                    asc(FileActionRequest.requested_at)
                 ).all()
             log.info("Found {} pending requests".format(len(requests)))
             for request, action, data_product in requests:
@@ -132,8 +133,8 @@ if __name__ == "__main__":
     parser.add_option('--log_level', type=str, help="Logging level", dest="log", default="info")
     opts, args = parser.parse_args()
     log.setLevel(opts.log.upper())
-    uploader = TrapumFileActions(opts.db)
-
+    handler = TrapumFileActions(opts.db)
+    handler.handle_requests()
 
 
 
