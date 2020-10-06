@@ -2,6 +2,7 @@ import logging
 import optparse
 import time
 import datetime
+import os
 from functools import wraps
 from contextlib import contextmanager
 from sqlalchemy import create_engine, func, asc
@@ -51,11 +52,13 @@ class Timer(object):
 
 
 class TrapumFileActions(object):
-    def __init__(self, database):
+    def __init__(self, database, execute=False, allow_destructive=False):
         self._session_engine = create_engine(database,
             echo=False, poolclass=NullPool)
         self._session_factory = sessionmaker(
             bind=self._session_engine)
+        self._execute = False
+        self._allow_destructive = False
 
     @contextmanager
     def session(self):
@@ -86,7 +89,9 @@ class TrapumFileActions(object):
                     FileAction.action.in_(valid_actions)
                 )
             requests = query.filter(
-                    FileActionRequest.completed_at.is_(None)
+                    FileActionRequest.completed_at.is_(None),
+                    DataProduct.available == 1,
+                    DataProduct.locked == 0
                 ).order_by(
                     asc(FileActionRequest.requested_at)
                 ).all()
@@ -95,12 +100,28 @@ class TrapumFileActions(object):
                 fullpath = "/".join([data_product.filepath,data_product.filename])
                 log.debug("Handling request ID {} (action={}, destructive={}, dp={})".format(
                     request.id, action.action, bool(action.is_destructive), fullpath))
+                if action.is_destructive and not self._allow_destructive:
+                    log.warning("Destructive action will not be taken: {}".format(
+                        action.action))
+                    continue
                 handler = getattr(self, action.action, self.unknown_action)
-                handler(request, action, data_product)
+                if self._execute:
+                    handler(request, action, data_product)
+                else:
+                    log.debug("Dry-run mode: Skipping call to handler {}".format(handler))
 
     @Timer.track
     def delete(self, request, action, data_product):
-        pass
+        try:
+            path = os.path.join(data_product.filepath, data_product.filename)
+            os.remove(path)
+        except Exception as error:
+            log.exception("Error while deleting file {}: {}".format(
+                path, str(error)))
+        else:
+            request.success = 1
+            request.completed_at = datetime.datetime.utcnow()
+            data_product.available = 0
 
     @Timer.track
     def noop(self, request, action, data_product):
@@ -130,10 +151,12 @@ if __name__ == "__main__":
     logging.basicConfig(format=FORMAT, level=logging.DEBUG)
     parser = optparse.OptionParser()
     parser.add_option('--db', type=str, help="SQLA DB connection string", dest="db")
+    parser.add_option('--execute', action="store_true", help="Default behaviour is to dry-run through the requests, this option is required for actions", dest="execute")
+    parser.add_option('--allow-destructive', action="store_true", help="Allows destructive file actions", dest="allow_destructive")
     parser.add_option('--log_level', type=str, help="Logging level", dest="log", default="info")
     opts, args = parser.parse_args()
     log.setLevel(opts.log.upper())
-    handler = TrapumFileActions(opts.db)
+    handler = TrapumFileActions(opts.db, opts.execute, opts.allow_destructive)
     handler.handle_requests()
 
 
