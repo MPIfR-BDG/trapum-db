@@ -1,14 +1,15 @@
 import logging
-import optparse
+import argparse
 import time
 import tarfile
 import os
+import io
 from functools import wraps
 from contextlib import contextmanager
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
-from trapum_db import DataProduct
+from trapum_db import DataProduct, Target, Pointing, Beam
 
 log = logging.getLogger('trapum_db.file_actions')
 
@@ -79,10 +80,18 @@ class TrapumCandidateSelector(object):
         else:
             output = None
         n = len(tarballs)
-        for ii, tarball in enumerate(tarballs):
-            candidates.extend(self.extract(tarball, pics_score, output))
+        for ii, (tarball, source, pid, bid, name, utc) in enumerate(tarballs):
+            for fname, pics_score in self.extract(tarball, pics_score, output):
+                candidates.append([tarball, source, pid, bid, name, utc, fname, pics_score])
             log.info("Completed {} of {} tarballs".format(ii+1, n))
         if output:
+            string = io.BytesIO()
+            for row in candidates:
+                string.write(",".join(row) + "\n")
+            string.seek(0)
+            info = tarfile.TarInfo(name="overview.csv")
+            info.size = len(string.buf)
+            output.addfile(tarinfo=info, fileobj=string)
             output.close()
         log.info("Extracted a total of {} candidates".format(
             len(candidates)))
@@ -113,7 +122,7 @@ class TrapumCandidateSelector(object):
                         if output:
                             m = f.getmember(png_name)
                             output.addfile(m, f.extractfile(m))
-                        extracted_candidates.append((tarball, png_name))
+                        extracted_candidates.append((png_name, score))
         log.info("Found {} candidates above PICs score {}".format(
             len(extracted_candidates), pics_score))
         return extracted_candidates
@@ -123,34 +132,45 @@ class TrapumCandidateSelector(object):
         with self.session() as session:
             tarballs = session.query(
                     DataProduct.filepath,
-                    DataProduct.filename
+                    DataProduct.filename,
+                    Target.source_name,
+                    Pointing.id.label("pointing_id"),
+                    Beam.id.label("beam_id"),
+                    Beam.name,
+                    Pointing.utc_start
+                ).join(
+                    Pointing, Pointing.id == DataProduct.pointing_id
+                ).join(
+                    Beam, Beam.id == DataProduct.beam_id
+                ).join(
+                    Target
                 ).filter(
                     DataProduct.pointing_id.in_(pointings),
                     DataProduct.file_type_id == 25
                 ).all()
         log.info("Found {} tarballs for pointings: {}".format(len(tarballs), pointings))
-        return [os.path.join(i.filepath, i.filename) for i in tarballs]
+        return [(os.path.join(i.filepath, i.filename), i.source_name, i.pointing_id, i.beam_id, i.name, i.utc_start) for i in tarballs]
 
 
 if __name__ == "__main__":
     FORMAT = "[%(levelname)s - %(asctime)s - %(filename)s:%(lineno)s] %(message)s"
     logging.basicConfig(format=FORMAT, level=logging.DEBUG)
-    parser = optparse.OptionParser()
-    parser.add_option('--db', type=str, help="SQLA DB connection string", dest="db")
-    parser.add_option('--pics-score', type=float, help="Extract candidate above this score", dest="pics_score", default=0.0)
-    parser.add_option('--output-tar', type=str, help="Extract to new tarfile", dest="output_tar", default=None)
-    parser.add_option('--pointing', type=int, help="Pointing ID to extract", dest="pointing_id")
-    parser.add_option('--log_level', type=str, help="Logging level", dest="log", default="info")
-    opts, args = parser.parse_args()
-    if not opts.pointing_id:
+    parser = argparse.ArgumentParser(description="Script for extracting candidate PNGs from TRAPUM tarballs")
+    parser.add_argument('--db', type=str, help="SQLA DB connection string", dest="db")
+    parser.add_argument('--pics-score', type=float, help="Extract candidate above this score", dest="pics_score", default=0.0)
+    parser.add_argument('--output-tar', type=str, help="Extract to new tarfile", dest="output_tar", default=None)
+    parser.add_argument('--pointings', type=int, nargs='+', help="Pointing ID to extract", dest="pointing_ids")
+    parser.add_argument('--log-level', type=str, help="Logging level", dest="log", default="info")
+    opts = parser.parse_args()
+    if len(opts.pointing_ids) == 0:
         raise Exception("No --pointing value passed")
     log.setLevel(opts.log.upper())
     selector = TrapumCandidateSelector(
         opts.db)
 
-    TMP_POINTINGS = [149,150,151,152,153,154,157,158,160,161,162,163,164,165,166,167,168,169,170,213,214,215,216,217,218,219,220,221,222,223,224,225,226,227,228,229,230,231,232,126,131,132,133,134,135,136,137,138,139,144,140,141,142,143,145,146,147,148]
+    #TMP_POINTINGS = [149 150 151 152 153 154 157 158 160 161 162 163 164 165 166 167 168 169 170 213 214 215 216 217 218 219 220 221 222 223 224 225 226 227 228 229 230 231 232 126 131 132 133 134 135 136 137 138 139 144 140 141 142 143 145 146 147 148]
 
-    tarballs = selector.find_tarballs(TMP_POINTINGS)
+    tarballs = selector.find_tarballs(opts.pointing_ids)
     candidates = selector.extract_all(
         tarballs,
         pics_score=opts.pics_score,
