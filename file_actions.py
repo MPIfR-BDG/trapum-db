@@ -57,8 +57,8 @@ class TrapumFileActions(object):
             echo=False, poolclass=NullPool)
         self._session_factory = sessionmaker(
             bind=self._session_engine)
-        self._execute = False
-        self._allow_destructive = False
+        self._execute = execute
+        self._allow_destructive = allow_destructive
 
     @contextmanager
     def session(self):

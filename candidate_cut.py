@@ -72,14 +72,16 @@ class TrapumCandidateSelector(object):
             session.close()
 
     @Timer.track
-    def extract_all(self, tarballs, pic_score=0.0, output_tar=None):
+    def extract_all(self, tarballs, pics_score=0.0, output_tar=None):
         candidates = []
         if output_tar:
             output = tarfile.open(output_tar, mode='w:gz')
         else:
             output = None
-        for tarball in tarballs:
-            candidates.extend(self.extract(tarball, pic_score, output))
+        n = len(tarballs)
+        for ii, tarball in enumerate(tarballs):
+            candidates.extend(self.extract(tarball, pics_score, output))
+            log.info("Completed {} of {} tarballs".format(ii+1, n))
         if output:
             output.close()
         log.info("Extracted a total of {} candidates".format(
@@ -87,8 +89,8 @@ class TrapumCandidateSelector(object):
         return candidates
 
     @Timer.track
-    def extract(self, tarball, pic_score=0.0, output=None):
-        log.info("Extracting: {}".format(pic_score))
+    def extract(self, tarball, pics_score=0.0, output=None):
+        log.info("Extracting: {}".format(tarball))
         extracted_candidates = []
         with tarfile.open(tarball) as f:
             basename = f.getmembers()[0].name.split("/")[0]
@@ -104,7 +106,7 @@ class TrapumCandidateSelector(object):
             with f.extractfile(pics_file_member) as fo:
                 for line in fo.readlines():
                     pfd, score = line.split()
-                    if float(score) > pic_score:
+                    if float(score) > pics_score:
                         pfd = pfd.decode()
                         png_name = "{}/{}.png".format(
                             basename, pfd.split("/")[-1])
@@ -113,7 +115,7 @@ class TrapumCandidateSelector(object):
                             output.addfile(m, f.extractfile(m))
                         extracted_candidates.append((tarball, png_name))
         log.info("Found {} candidates above PICs score {}".format(
-            len(extracted_candidates), pic_score))
+            len(extracted_candidates), pics_score))
         return extracted_candidates
 
     @Timer.track
@@ -126,8 +128,8 @@ class TrapumCandidateSelector(object):
                     DataProduct.pointing_id.in_(pointings),
                     DataProduct.file_type_id == 25
                 ).all()
-        log.info("Found {} tarballs for pointings: {}".format(pointings))
-        return [os.path.join(i) for i in tarballs]
+        log.info("Found {} tarballs for pointings: {}".format(len(tarballs), pointings))
+        return [os.path.join(i.filepath, i.filename) for i in tarballs]
 
 
 if __name__ == "__main__":
@@ -145,10 +147,13 @@ if __name__ == "__main__":
     log.setLevel(opts.log.upper())
     selector = TrapumCandidateSelector(
         opts.db)
-    tarballs = selector.find_tarballs([opts.pointing_id])
+
+    TMP_POINTINGS = [149,150,151,152,153,154,157,158,160,161,162,163,164,165,166,167,168,169,170,213,214,215,216,217,218,219,220,221,222,223,224,225,226,227,228,229,230,231,232,126,131,132,133,134,135,136,137,138,139,144,140,141,142,143,145,146,147,148]
+
+    tarballs = selector.find_tarballs(TMP_POINTINGS)
     candidates = selector.extract_all(
         tarballs,
-        pics_score=opts.pic_score,
+        pics_score=opts.pics_score,
         output_tar=opts.output_tar)
 
 
