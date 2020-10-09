@@ -4,6 +4,11 @@ import time
 import tarfile
 import os
 import io
+import subprocess
+import shlex
+import glob
+import sys
+import cPickle
 from functools import wraps
 from contextlib import contextmanager
 from sqlalchemy import create_engine
@@ -11,9 +16,16 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 from trapum_db import DataProduct, Target, Pointing, Beam
 
-log = logging.getLogger('trapum_db.file_actions')
+sys.path.append('/home/psr')
+import ubc_AI
+from ubc_AI.data import pfdreader
+AI_PATH = '/'.join(ubc_AI.__file__.split('/')[:-1]) + '/trained_AI/'
+MODELS = ["clfl2_trapum_Ter5.pkl", "clfl2_PALFA.pkl"]
 
-PICS_FILE = "pics_original_descending_scores.txt"
+log = logging.getLogger('trapum_db.candidate_selector')
+
+PICS_FILE = "pics_scores.txt"
+
 
 class TimeTracker(object):
     def __init__(self):
@@ -114,15 +126,20 @@ class TrapumCandidateSelector(object):
                 return extracted_candidates
             with f.extractfile(pics_file_member) as fo:
                 for line in fo.readlines():
-                    pfd, score = line.split()
-                    if float(score) > pics_score:
+                    if line.startswith("#"):
+                        continue
+                    split = line.split(",")
+                    pfd = split[0]
+                    scores = map(float, split[1:])
+
+                    if any([float(score) >= pics_score for score in scores]):
                         pfd = pfd.decode()
-                        png_name = "{}/{}.png".format(
+                        png_name = "{}/{}.ar.png".format(
                             basename, pfd.split("/")[-1])
                         if output:
                             m = f.getmember(png_name)
                             output.addfile(m, f.extractfile(m))
-                        extracted_candidates.append((png_name, score))
+                        extracted_candidates.append((png_name, *scores))
         log.info("Found {} candidates above PICs score {}".format(
             len(extracted_candidates), pics_score))
         return extracted_candidates
@@ -148,8 +165,86 @@ class TrapumCandidateSelector(object):
                     DataProduct.pointing_id.in_(pointings),
                     DataProduct.file_type_id == 25
                 ).all()
-        log.info("Found {} tarballs for pointings: {}".format(len(tarballs), pointings))
+        log.info("Found {} tarballs for pointings: {}".format(
+            len(tarballs), pointings))
         return [(os.path.join(i.filepath, i.filename), i.source_name, i.pointing_id, i.beam_id, i.name, i.utc_start) for i in tarballs]
+
+
+def tar_filter(extensions):
+    def filter_func(info):
+        if any([info.name.endswith(ex) for ex in extensions]):
+            return None
+        else:
+            return info
+    return filter_func
+
+
+def parse_pdmp_stdout(stream):
+    for line in stream.splitlines():
+        if line.startswith("Best DM"):
+            dm = float(line.split()[3])
+            break
+    else:
+        raise Exception("no best DM")
+    for line in stream.splitlines():
+        if line.startswith("Best TC Period"):
+            tc = float(line.split()[5])
+            break
+    else:
+        raise Exception("no best TC period")
+    return tc, dm
+
+
+def convert_and_score(tarball, out_tarball):
+    with tarfile.open(tarball, "r:gz") as f:
+        members = f.getmembers()
+        pfd_members = [member for member in members if member.name.endswith(b".pfd")]
+        f.extractall()
+        basename = pfd_members[0].name.split("/")[0]
+        os.system("psrconv -o psrfits -e ar {}/*.pfd".format(basename))
+        time.sleep(2)
+        os.system("clfd --no-report {}/*.ar".format(basename))
+        for member in pfd_members:
+            ar_name = member.name.replace(".pfd", ".ar")
+            os.system("mv {} {}".format(member.name.replace(".pfd", ".ar.clfd"), ar_name))
+        cwd = os.getcwd()
+        os.chdir("{}/{}".format(cwd, basename))
+        for ar in glob.glob("*.ar"):
+            tc, dm = parse_pdmp_stdout(subprocess.check_output(shlex.split("pdmp -mc 32 -ms 32 -g {}.png/png {}".format(ar, ar))))
+            os.system("pam --period {} -d {} -m {}".format(str(tc/1000.0), dm, ar))
+        os.chdir(cwd)
+        extract_and_score(basename, MODELS)
+
+    with tarfile.open(out_tarball, "w:gz") as f:
+        f.add(basename, filter=tar_filter([".pfd", ".bestprof", ".ps", ".pfd.png"]))
+    os.rmdir(basename)
+
+
+def extract_and_score(path, models):
+    # Load model
+    classifiers = []
+    for model in models:
+        with open(os.path.join(AI_PATH, model), "rb") as f:
+            classifiers.append(cPickle.load(f))
+            log.info("Loaded model {}".format(model))
+    # Find all files
+    arfiles = glob.glob("{}/*.ar".format(path))
+    log.info("Retrieved {} archive files from {}".format(
+        len(arfiles), path))
+    scores = []
+    readers = [pfdreader(f) for f in arfiles]
+    for classifier in classifiers:
+        scores.append(classifier.report_score(readers))
+    log.info("Scored with all models")
+    combined = sorted(zip(arfiles, *scores), reverse=True, key=lambda x: x[1])
+    log.info("Sorted scores...")
+    names = "\t".join(["#{}".format(model.split("/")[-1]) for model in models])
+    with open("{}/pics_scores.txt".format(path)) as fout:
+        fout.write("#arfile\t{}\n".format(names))
+        for row in combined:
+            scores = ",".join(row[1:])
+            fout.write("{},{}\n".format(row[0], scores))
+    log.info("Written to file in {}".format(path))
 
 
 if __name__ == "__main__":
@@ -171,8 +266,15 @@ if __name__ == "__main__":
     #TMP_POINTINGS = [149 150 151 152 153 154 157 158 160 161 162 163 164 165 166 167 168 169 170 213 214 215 216 217 218 219 220 221 222 223 224 225 226 227 228 229 230 231 232 126 131 132 133 134 135 136 137 138 139 144 140 141 142 143 145 146 147 148]
 
     tarballs = selector.find_tarballs(opts.pointing_ids)
+
+    new_tarballs = []
+    for tarball in tarballs:
+        new_tarball = tarball.replace(".tar.gz", "_rescore.tar.gz")
+        convert_and_score(tarball, new_tarball)
+        new_tarballs.append(new_tarball)
+
     candidates = selector.extract_all(
-        tarballs,
+        new_tarballs,
         pics_score=opts.pics_score,
         output_tar=opts.output_tar)
 
