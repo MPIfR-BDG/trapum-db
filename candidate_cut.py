@@ -21,6 +21,12 @@ import ubc_AI
 from ubc_AI.data import pfdreader
 AI_PATH = '/'.join(ubc_AI.__file__.split('/')[:-1]) + '/trained_AI/'
 MODELS = ["clfl2_trapum_Ter5.pkl", "clfl2_PALFA.pkl"]
+MODELS = [os.path.join(AI_PATH, m) for m in MODELS]
+#MODELS = glob.glob("/home/psr/ubc_AI/trained_AI/*.pkl")
+LOADED_MODELS = []
+for MODEL in MODELS:
+    with open(MODEL, 'rb') as f:
+        LOADED_MODELS.append(cPickle.load(f))
 
 log = logging.getLogger('trapum_db.candidate_selector')
 
@@ -93,16 +99,19 @@ class TrapumCandidateSelector(object):
             output = None
         n = len(tarballs)
         for ii, (tarball, source, pid, bid, name, utc) in enumerate(tarballs):
-            for fname, pics_score in self.extract(tarball, pics_score, output):
-                candidates.append([tarball, source, pid, bid, name, utc, fname, pics_score])
+            for fname, scores in self.extract(tarball, pics_score, output):
+                candidates.append([tarball, source, pid, bid, name, utc, fname] + scores)
             log.info("Completed {} of {} tarballs".format(ii+1, n))
         if output:
             string = io.BytesIO()
+            string.write("#tarball #source #pid #bid #bname #utc #fname {}\n".format(
+		"".join(["#{} ".format(i.split("/")[-1]) for i in MODELS])))
             for row in candidates:
-                string.write(",".join(row) + "\n")
+                string.write(",".join(map(str, row)) + "\n")
+            nbytes = string.tell()
             string.seek(0)
             info = tarfile.TarInfo(name="overview.csv")
-            info.size = len(string.buf)
+            info.size = nbytes
             output.addfile(tarinfo=info, fileobj=string)
             output.close()
         log.info("Extracted a total of {} candidates".format(
@@ -124,22 +133,27 @@ class TrapumCandidateSelector(object):
                 log.warning("No PICs file detected in tarball: {}".format(
                     tarball))
                 return extracted_candidates
-            with f.extractfile(pics_file_member) as fo:
-                for line in fo.readlines():
-                    if line.startswith("#"):
-                        continue
-                    split = line.split(",")
-                    pfd = split[0]
-                    scores = map(float, split[1:])
+            fo = f.extractfile(pics_file_member)
+            for line in fo.readlines():
+                if line.startswith("#"):
+                    continue
+                split = line.split(",")
+                pfd = split[0]
+                scores = map(float, split[1:])
 
-                    if any([float(score) >= pics_score for score in scores]):
-                        pfd = pfd.decode()
-                        png_name = "{}/{}.ar.png".format(
-                            basename, pfd.split("/")[-1])
-                        if output:
+                if any([float(score) >= pics_score for score in scores]):
+                    pfd = pfd.decode()
+                    png_name = "{}/{}.png".format(
+                        basename, pfd.split("/")[-1])
+                    if output:
+                        try:
                             m = f.getmember(png_name)
+                        except:
+                            continue
+                        else:
                             output.addfile(m, f.extractfile(m))
-                        extracted_candidates.append((png_name, *scores))
+                    extracted_candidates.append((png_name, scores))
+        fo.close()
         log.info("Found {} candidates above PICs score {}".format(
             len(extracted_candidates), pics_score))
         return extracted_candidates
@@ -195,6 +209,59 @@ def parse_pdmp_stdout(stream):
     return tc, dm
 
 
+def get_dm_info(ar):
+    beam, utc, _, _, cand_id, _, orig_dm, _, orig_acc, orig_period, _ = ar.split("/")[-1].split("_")
+    fname, bwidth, opt_dm = subprocess.check_output("psrstat -Q -c bwidth -c dm {}".format(ar), shell=True).strip().split()
+    orig_dm = float(orig_dm)
+    bwidth = float(bwidth)
+    opt_dm = float(opt_dm)
+    pdmp_dm_range = bwidth * 9532
+    npdmp_ranges = abs(orig_dm - opt_dm) / pdmp_dm_range
+    return orig_dm, opt_dm, npdmp_ranges
+
+
+def reinstall_dms(tarball, out_tarball):
+    log.info("reinstalling DMs on {}".format(tarball))
+    with tarfile.open(tarball, "r:gz") as f:
+        members = f.getmembers()
+        ar_members = [member for member in members if member.name.endswith(b".ar")]
+        f.extractall()
+        basename = ar_members[0].name.split("/")[0]
+        for member in ar_members:
+            log.debug("Testing {}".format(member.name))
+            ar = member.name
+            orig_dm, opt_dm, npdmp_ranges = get_dm_info(ar)
+            log.debug("Orig DM: {},   Opt DM {},   NPDMP {}".format(orig_dm, opt_dm, npdmp_ranges))
+	    if orig_dm <= 2.0:
+	        log.debug("Orig DM <= 2, deleting candidate")
+                os.remove(ar)
+                os.remove("{}.png".format(ar))
+	        continue
+            if npdmp_ranges > 0.5:
+                log.debug("DM test exceeds tolerance")
+                log.debug("Reinstalling original DM")
+                os.system("pam -d {} -m {}".format(orig_dm, ar))
+                log.debug("Rerunning pdmp") 
+                os.remove("{}.png".format(ar))
+                cwd = os.getcwd()
+                os.chdir(basename)
+                tmp_ar = ar.split("/")[-1]
+                tc, dm = parse_pdmp_stdout(
+                    subprocess.check_output(
+                        shlex.split("pdmp -mc 32 -ms 32 -g {}.png/png {}".format(tmp_ar, tmp_ar))))
+                os.chdir(cwd)
+                log.debug("Optimal PDMP params: DM {},  period {} ms".format(dm, tc))
+                os.system("pam --period {} -d {} -m {}".format(str(tc/1000.0), dm, ar))
+            else:
+                os.remove(ar)
+                os.remove("{}.png".format(ar))
+        extract_and_score(basename)
+
+    with tarfile.open(out_tarball, "w:gz") as f:
+        f.add(basename, filter=tar_filter([".pfd", ".bestprof", ".ps", ".pfd.png"]))
+    os.system("rm -rf {}".format(basename))
+
+
 def convert_and_score(tarball, out_tarball):
     with tarfile.open(tarball, "r:gz") as f:
         members = f.getmembers()
@@ -210,27 +277,26 @@ def convert_and_score(tarball, out_tarball):
         cwd = os.getcwd()
         os.chdir("{}/{}".format(cwd, basename))
         for ar in glob.glob("*.ar"):
+            log.info("pdmp {}".format(ar))
             tc, dm = parse_pdmp_stdout(subprocess.check_output(shlex.split("pdmp -mc 32 -ms 32 -g {}.png/png {}".format(ar, ar))))
             os.system("pam --period {} -d {} -m {}".format(str(tc/1000.0), dm, ar))
         os.chdir(cwd)
-        extract_and_score(basename, MODELS)
+        extract_and_score(basename)
 
     with tarfile.open(out_tarball, "w:gz") as f:
         f.add(basename, filter=tar_filter([".pfd", ".bestprof", ".ps", ".pfd.png"]))
-    os.rmdir(basename)
+    os.system("rm -rf {}".format(basename))
 
 
-def extract_and_score(path, models):
+def extract_and_score(path):
     # Load model
-    classifiers = []
-    for model in models:
-        with open(os.path.join(AI_PATH, model), "rb") as f:
-            classifiers.append(cPickle.load(f))
-            log.info("Loaded model {}".format(model))
+    classifiers = LOADED_MODELS
     # Find all files
     arfiles = glob.glob("{}/*.ar".format(path))
     log.info("Retrieved {} archive files from {}".format(
         len(arfiles), path))
+    if len(arfiles) == 0:
+        return
     scores = []
     readers = [pfdreader(f) for f in arfiles]
     for classifier in classifiers:
@@ -238,11 +304,11 @@ def extract_and_score(path, models):
     log.info("Scored with all models")
     combined = sorted(zip(arfiles, *scores), reverse=True, key=lambda x: x[1])
     log.info("Sorted scores...")
-    names = "\t".join(["#{}".format(model.split("/")[-1]) for model in models])
-    with open("{}/pics_scores.txt".format(path)) as fout:
+    names = "\t".join(["#{}".format(model.split("/")[-1]) for model in MODELS])
+    with open("{}/pics_scores.txt".format(path), "w") as fout:
         fout.write("#arfile\t{}\n".format(names))
         for row in combined:
-            scores = ",".join(row[1:])
+            scores = ",".join(map(str, row[1:]))
             fout.write("{},{}\n".format(row[0], scores))
     log.info("Written to file in {}".format(path))
 
@@ -266,13 +332,27 @@ if __name__ == "__main__":
     #TMP_POINTINGS = [149 150 151 152 153 154 157 158 160 161 162 163 164 165 166 167 168 169 170 213 214 215 216 217 218 219 220 221 222 223 224 225 226 227 228 229 230 231 232 126 131 132 133 134 135 136 137 138 139 144 140 141 142 143 145 146 147 148]
 
     tarballs = selector.find_tarballs(opts.pointing_ids)
+    new_tarballs = []   
+    for ii, tarball in enumerate(tarballs):
+        log.info("Rescoring/reinstalling tarball {} of {}".format(ii+1, len(tarballs)))
+        tarball = list(tarball) 
+        tarname = tarball[0]
+        new_tarname = tarname.replace(".tar.gz", "_rescore.tar.gz")
+        if not os.path.isfile(new_tarname): 
+            convert_and_score(tarname, new_tarname)
+        else:
+            log.info("Skipping generation of {} as it already exists".format(new_tarname))
+        dm_reinstall_tarname = new_tarname.replace("_rescore.tar.gz", "_redm.tar.gz")
+	if not os.path.isfile(dm_reinstall_tarname):
+	    reinstall_dms(new_tarname, dm_reinstall_tarname)
+        else:
+            log.info("Skipping generation of {} as it already exists".format(dm_reinstall_tarname))
+        new_row = [dm_reinstall_tarname]
+        new_row.extend(tarball[1:])
+        new_tarballs.append(new_row)
 
-    new_tarballs = []
-    for tarball in tarballs:
-        new_tarball = tarball.replace(".tar.gz", "_rescore.tar.gz")
-        convert_and_score(tarball, new_tarball)
-        new_tarballs.append(new_tarball)
-
+    print(tarballs)
+  
     candidates = selector.extract_all(
         new_tarballs,
         pics_score=opts.pics_score,
