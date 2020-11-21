@@ -258,6 +258,9 @@ if __name__ == "__main__":
         raise Exception("No --pointing value passed")
     log.setLevel(opts.log.upper())
     selector = TrapumCandidateSelector(opts.db)
+    tarballs = selector.find_tarballs(opts.pointing_ids)
+    if not tarballs:
+        raise Exception("No candidate returned")
     agg = AggregatedCandfile(opts.output_tar)
     for tarball in tarballs:
         log.info("Parsing cand file: {}".format(repr(tarball)))
