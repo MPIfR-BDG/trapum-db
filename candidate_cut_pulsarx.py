@@ -262,7 +262,9 @@ if __name__ == "__main__":
     if not tarballs:
         raise Exception("No candidate returned")
     agg = AggregatedCandfile(opts.output_tar)
-    for tarball in tarballs:
+    n = len(tarballs)
+    for ii, tarball in enumerate(tarballs):
         log.info("Parsing cand file: {}".format(repr(tarball)))
         agg.add_candidates(tarball, opts.pics_cut, opts.dm_cut, opts.sn_cut)
+        log.info("Completed {} of {} extractions".format(ii, n))
     agg.finalise()
