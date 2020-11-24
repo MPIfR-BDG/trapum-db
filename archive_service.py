@@ -388,7 +388,7 @@ def generate_requests_from_file(fname):
     return copy_requests
 
 def get_disks():
-    disk_paths = glob.glob("{}/TRAPUM_*".format(DISK_PATH))
+    disk_paths = sorted(glob.glob("{}/TRAPUM_*".format(DISK_PATH)))
     disk_pool = [Disk(path) for path in disk_paths]
     return disk_pool
 
@@ -430,7 +430,7 @@ if __name__ == "__main__":
             copy_manager.enqueue(request)
         db_updater = DBUpdater(db_conn, copy_manager._output_queue)
         db_updater.start()
-        def terminate():
+        def terminate(*args, **kwargs):
             copy_manager.terminate()
             db_updater.join()
         signal.signal(signal.SIGINT, terminate)
@@ -441,7 +441,7 @@ if __name__ == "__main__":
         copy_requests = generate_requests_from_file(opts.file)
         for request in copy_requests:
             copy_manager.enqueue(request)
-        signal.signal(signal.SIGINT, copy_manager.terminate)
+        signal.signal(signal.SIGINT, lambda *args, **kwargs: copy_manager.terminate())
         copy_manager.wait()
 
 
