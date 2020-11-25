@@ -23,7 +23,7 @@ log = logging.getLogger('trapum_db.archive_service')
 
 DISK_LIMIT = 0.95  # Disks will not be filled beyond this fraction
 DISK_PATH = "/media/local/"
-ACTIVE_DISKS = 10
+ACTIVE_DISKS = 20
 ACTION_TYPE = "mtrans::archive"
 TERMINATOR = "EOQ"
 EXPECTED_PERFORMANCE = 200e6  # 200 MB/s
@@ -166,7 +166,7 @@ class CopyThread(Thread):
                     self.__repr__(), expected_copy_time))
                 start = time.time()
                 #shutil.copy2(request.source, disk_path)
-                os.system("rsync -a {} {}".format(request.source, disk_path))
+                os.system("rsync -a -W --no-compress {} {}".format(request.source, disk_path))
                 os.sync()
                 end = time.time()
                 log.debug("{}: Actual copy time {} seconds".format(
@@ -242,7 +242,6 @@ class CopyManager(object):
         for thread in self._threads:
             log.debug("Injecting terminator into queue")
             self._queue.put(TERMINATOR)
-            thread.stop()
         for thread in self._threads:
             log.debug("Joined thread {}".format(thread))
             thread.join()
@@ -439,7 +438,7 @@ if __name__ == "__main__":
 
     elif opts.file:
         copy_requests = generate_requests_from_file(opts.file)
-        for request in copy_requests:
+        for request in copy_requests[:200]:
             copy_manager.enqueue(request)
         signal.signal(signal.SIGINT, lambda *args, **kwargs: copy_manager.terminate())
         copy_manager.wait()
