@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
-from trapum_db import DataProduct, Target, Pointing, Beam
+from trapum_db import DataProduct, Target, Pointing, Beam, Processing, ProcessingRequest
 
 log = logging.getLogger("candidate_cut_pulsarx")
 
@@ -67,7 +67,11 @@ class CandidateTarArchive(object):
         for member in self._file.getmembers():
             if member.name.endswith(".meta"):
                 self.metafile = member
-                self.basename = member.name.split("/")[0]
+	        split_name = member.name.split("/")
+                if len(split_name) > 1:
+                    self.basename = split_name[0]
+                else:
+                    self.basename = ""
                 log.debug("Found metafile member: {}".format(self.metafile))
                 log.debug("Basename: {}".format(self.basename))
             elif member.name.endswith(".csv"):
@@ -82,7 +86,7 @@ class CandidateTarArchive(object):
         self.candidates = pandas.read_csv(csv_file)
 
     def extract_pngs(self, pngs, dest):
-        log.info("Extracting PNGs")
+        log.debug("Extracting PNGs")
         for png_path_new, png_path in pngs:
             member = self._file.getmember(png_path)
             info = info_from_member(png_path_new, member)
@@ -90,7 +94,7 @@ class CandidateTarArchive(object):
             dest.addfile(info, self._file.extractfile(member))
 
     def extract_metafile(self, name, dest):
-        log.info("Extracting metafile")
+        log.debug("Extracting metafile")
         info = info_from_member(name, self.metafile)
         dest.addfile(info, self._file.extractfile(self.metafile))
 
@@ -130,6 +134,9 @@ class AggregatedCandfile(object):
                              ((candidates["pics_TRAPUM_Ter5"] > pics_cut) |
                               (candidates["pics_PALFA"] > pics_cut)) &
                               (candidates["S/N_new"] > sn_cut)]
+        if len(subset) == 0:
+            log.info("No candidates to extract")
+            return
         pngs = []
         for _, candidate in subset.iterrows():
             png_path = os.path.join(
@@ -189,6 +196,7 @@ class AggregatedCandfile(object):
             self._csv_file.write(b"\n")
             # add PNG
             pngs.append([new_png_path, png_path])
+        log.info("Exracting {} candidates that meet the cut".format(len(pngs)))
         # Extract all PNGs
         cand_archive.extract_pngs(pngs, self._tar_file)
         # Extract metadata file
@@ -215,7 +223,7 @@ class TrapumCandidateSelector(object):
         finally:
             session.close()
 
-    def find_tarballs(self, pointings):
+    def find_tarballs(self, prequests):
         with self.session() as session:
             tarballs = session.query(
                     DataProduct.filepath,
@@ -228,43 +236,67 @@ class TrapumCandidateSelector(object):
                 ).join(
                     Pointing, Pointing.id == DataProduct.pointing_id
                 ).join(
+                    Processing, Processing.id == DataProduct.processing_id
+                ).join(
+                    Processing.processing_request
+                ).join(
                     Beam, Beam.id == DataProduct.beam_id
                 ).join(
                     Target
                 ).filter(
-                    DataProduct.pointing_id.in_(pointings),
-                    DataProduct.file_type_id == 25,
-                    DataProduct.upload_date > "2020-11-20"
+                    ProcessingRequest.id.in_(prequests), 
+                    DataProduct.file_type_id == 35,
                 ).all()
-        log.info("Found {} tarballs for pointings: {}".format(
-            len(tarballs), pointings))
+        log.info("Found {} tarballs for prequests: {}".format(
+            len(tarballs), prequests))
         return [CandidateTarArchive(os.path.join(i.filepath, i.filename),
             i.source_name, i.pointing_id, i.beam_id, i.name, i.utc_start)
             for i in tarballs]
+
+
+def extract(tar_name, tarballs):
+    log.info("Extracting to {}".format(tar_name))
+    agg = AggregatedCandfile(tar_name)
+    n = len(tarballs)
+    for ii, tarball in enumerate(tarballs):
+        log.info("Parsing cand file: {}".format(repr(tarball)))
+        try:
+            agg.add_candidates(tarball, opts.pics_cut, opts.dm_cut, opts.sn_cut)
+            log.info("Completed {} of {} extractions".format(ii+1, n))
+        except Exception as error:
+            with open("errors.txt", "a") as f:
+                f.write("{}, {}\n".format(ii, repr(tarball)))
+    agg.finalise()
 
 if __name__ == "__main__":
     FORMAT = "[%(levelname)s - %(asctime)s - %(filename)s:%(lineno)s] %(message)s"
     logging.basicConfig(format=FORMAT, level=logging.DEBUG)
     parser = argparse.ArgumentParser(description="Script for extracting candidate PNGs from TRAPUM tarballs")
     parser.add_argument('--db', type=str, help="SQLA DB connection string", dest="db")
-    parser.add_argument('--output-tar', type=str, help="Extract to new tarfile", dest="output_tar", default=None)
-    parser.add_argument('--pointings', type=int, nargs='+', help="Pointing ID to extract", dest="pointing_ids")
+    parser.add_argument('--output-tar', type=str, help="Extract to new tarfile (if using --split give basename)", dest="output_tar", default=None)
+    parser.add_argument('--prequests', type=int, nargs='+', help="Processing request IDs to extract", dest="prequest_ids")
     parser.add_argument('--pics-cut', type=float,  help="Minimim valid PICs score", dest="pics_cut", default=0.1)
     parser.add_argument('--dm-cut', type=float,  help="Minimum valid DM", dest="dm_cut", default=3.0)
-    parser.add_argument('--sn-cut', type=float,  help="Minimum valid S/N", dest="sn_cut", default=7.0)
+    parser.add_argument('--sn-cut', type=float,  help="Minimum valid S/N", dest="sn_cut", default=7.0)   
+    parser.add_argument('--split', action="store_true",  help="Split output tarball by pointing", dest="split", default=False)
     parser.add_argument('--log-level', type=str, help="Logging level", dest="log", default="info")
     opts = parser.parse_args()
-    if len(opts.pointing_ids) == 0:
+    if len(opts.prequest_ids) == 0:
         raise Exception("No --pointing value passed")
     log.setLevel(opts.log.upper())
     selector = TrapumCandidateSelector(opts.db)
-    tarballs = selector.find_tarballs(opts.pointing_ids)
+    tarballs = selector.find_tarballs(opts.prequest_ids)
     if not tarballs:
         raise Exception("No candidate returned")
-    agg = AggregatedCandfile(opts.output_tar)
-    n = len(tarballs)
-    for ii, tarball in enumerate(tarballs):
-        log.info("Parsing cand file: {}".format(repr(tarball)))
-        agg.add_candidates(tarball, opts.pics_cut, opts.dm_cut, opts.sn_cut)
-        log.info("Completed {} of {} extractions".format(ii, n))
-    agg.finalise()
+
+    if opts.split:
+        pointings = {}
+        for tarball in tarballs:
+            if tarball.pointing_id not in pointings:
+                pointings[tarball.pointing_id] = []
+            pointings[tarball.pointing_id].append(tarball) 	
+	for pointing_id, ptarballs in pointings.items():
+            out_name = "{}_{}_{}.tar.gz".format(opts.output_tar.strip(".tar.gz"), pointing_id, ptarballs[0].source) 
+            extract(out_name, ptarballs) 
+    else:
+        extract(opts.output_tar, tarballs)            

@@ -1,7 +1,7 @@
 # coding: utf-8
 from sqlalchemy import Column, DateTime, Float, ForeignKey, Index, String, Table, Text
 from sqlalchemy.dialects.mysql import INTEGER, TINYINT
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, backref
 from sqlalchemy.ext.declarative import declarative_base
 
 Base = declarative_base()
@@ -115,6 +115,11 @@ t_membership_roles = Table(
     Column('membership_role_id', ForeignKey('membership_role.id'), primary_key=True, nullable=False, index=True)
 )
 
+t_processing_request_processings = Table(
+    'processing_request_processings', metadata,
+    Column('processing_id', ForeignKey('processing.id'), primary_key=True, nullable=False),
+    Column('processing_request_id', ForeignKey('processing_request.id'), primary_key=True, nullable=False, index=True)
+)
 
 class Processing(Base):
     __tablename__ = 'processing'
@@ -131,6 +136,24 @@ class Processing(Base):
     arguments = relationship('ProcessingArgument')
     hardware = relationship('Hardware')
     pipeline = relationship('Pipeline')
+    processing_request = relationship('ProcessingRequest', secondary=t_processing_request_processings) 
+
+class ProcessingRequest(Base):
+    __tablename__ = 'processing_request'
+
+    id = Column(INTEGER(11), primary_key=True)
+    user_id = Column(ForeignKey('user.id', onupdate='CASCADE'), nullable=False, index=True)
+    pipeline_id = Column(ForeignKey('pipeline.id', onupdate='CASCADE'), nullable=False, index=True)
+    arguments_id = Column(ForeignKey('processing_arguments.id', onupdate='CASCADE'), index=True)
+    name = Column(String(64))
+    dispatcher_args_json = Column(Text)
+    dispatched_at = Column(DateTime)
+    dispatched_to = Column(String(64))
+
+    arguments = relationship('ProcessingArgument')
+    pipeline = relationship('Pipeline')
+    user = relationship('User')
+
 
 
 class WorkingGroup(Base):
