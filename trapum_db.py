@@ -1,5 +1,5 @@
 # coding: utf-8
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Index, String, Table, Text
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Index, String, TIMESTAMP, Table, Text, text
 from sqlalchemy.dialects.mysql import INTEGER, TINYINT
 from sqlalchemy.orm import relationship, backref
 from sqlalchemy.ext.declarative import declarative_base
@@ -70,6 +70,19 @@ class MembershipRole(Base):
     users = relationship('User', secondary='membership_roles')
 
 
+class ObservationReport(Base):
+    __tablename__ = 'observation_report'
+
+    id = Column(INTEGER(10), primary_key=True)
+    mongo_id = Column(String(1024), nullable=False)
+    created_at = Column(TIMESTAMP, nullable=False, server_default=text("CURRENT_TIMESTAMP"))
+    report_version = Column(Float, nullable=False)
+    generator_version = Column(Float, nullable=False)
+    previous_report_id = Column(ForeignKey('observation_report.id', ondelete='SET NULL'), index=True)
+
+    previous_report = relationship('ObservationReport', remote_side=[id])
+
+
 class Pipeline(Base):
     __tablename__ = 'pipeline'
 
@@ -85,6 +98,42 @@ class ProcessingArgument(Base):
 
     id = Column(INTEGER(11), primary_key=True)
     arguments_json = Column(Text)
+
+
+class ScheduleBlockConfiguration(Base):
+    __tablename__ = 'schedule_block_configuration'
+    __table_args__ = (
+        Index('unique_index', 'sb_id', 'mkat_pid', unique=True),
+    )
+
+    id = Column(INTEGER(11), primary_key=True)
+    mkat_pid = Column(String(64), nullable=False, server_default=text("'any'"))
+    sb_id = Column(String(64), nullable=False, server_default=text("'any'"))
+    config_json = Column(Text, nullable=False)
+
+
+class StorageDevice(Base):
+    __tablename__ = 'storage_device'
+
+    id = Column(INTEGER(11), primary_key=True)
+    name = Column(String(64), nullable=False, unique=True, server_default=text("''"))
+    type = Column(String(64), nullable=False, server_default=text("''"))
+    location = Column(Text, nullable=False)
+    notes = Column(Text)
+    last_updated = Column(DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP"))
+
+
+class TargetConfiguration(Base):
+    __tablename__ = 'target_configuration'
+    __table_args__ = (
+        Index('unique_index', 'source_name', 'sb_id', 'mkat_pid', unique=True),
+    )
+
+    id = Column(INTEGER(11), primary_key=True)
+    source_name = Column(String(64), nullable=False, server_default=text("'any'"))
+    mkat_pid = Column(String(64), nullable=False, server_default=text("'any'"))
+    sb_id = Column(String(64), nullable=False, server_default=text("'any'"))
+    config_json = Column(Text, nullable=False)
 
 
 class User(Base):
@@ -155,7 +204,6 @@ class ProcessingRequest(Base):
     user = relationship('User')
 
 
-
 class WorkingGroup(Base):
     __tablename__ = 'working_group'
 
@@ -173,6 +221,13 @@ t_memberships = Table(
     'memberships', metadata,
     Column('user_id', ForeignKey('user.id'), primary_key=True, nullable=False),
     Column('working_group_id', ForeignKey('working_group.id'), primary_key=True, nullable=False, index=True)
+)
+
+
+t_processing_request_processings = Table(
+    'processing_request_processings', metadata,
+    Column('processing_id', ForeignKey('processing.id'), primary_key=True, nullable=False),
+    Column('processing_request_id', ForeignKey('processing_request.id'), primary_key=True, nullable=False, index=True)
 )
 
 
@@ -218,8 +273,10 @@ class Pointing(Base):
     sb_id = Column(Text, nullable=False)
     mkat_pid = Column(Text, nullable=False)
     beam_shape = Column(Text)
+    observation_report_id = Column(ForeignKey('observation_report.id', ondelete='SET NULL', onupdate='CASCADE'), index=True)
 
     bf_config = relationship('BeamformerConfiguration')
+    observation_report = relationship('ObservationReport')
     target = relationship('Target')
 
 
@@ -235,6 +292,7 @@ class Beam(Base):
     name = Column(String(20))
 
     pointing = relationship('Pointing')
+    processing_requests = relationship('ProcessingRequest', secondary='processing_request_beams')
 
 
 class DataProduct(Base):
@@ -248,20 +306,40 @@ class DataProduct(Base):
     beam_id = Column(ForeignKey('beam.id', onupdate='CASCADE'), nullable=False, index=True)
     processing_id = Column(ForeignKey('processing.id', onupdate='CASCADE'), index=True)
     file_type_id = Column(ForeignKey('file_type.id', onupdate='CASCADE'), nullable=False, index=True)
-    filename = Column(String(64), nullable=False)
+    filename = Column(String(100))
     filepath = Column(String(255), nullable=False)
     filehash = Column(String(100))
     available = Column(TINYINT(1), nullable=False)
     locked = Column(TINYINT(1), nullable=False)
-    metainfo = Column(Text)
     upload_date = Column(DateTime, nullable=False)
     modification_date = Column(DateTime, nullable=False)
+    metainfo = Column(Text)
 
     beam = relationship('Beam')
     file_type = relationship('FileType')
     pointing = relationship('Pointing')
     processing = relationship('Processing')
     processings = relationship('Processing', secondary='processing_inputs')
+
+
+t_processing_request_beams = Table(
+    'processing_request_beams', metadata,
+    Column('beam_id', ForeignKey('beam.id'), primary_key=True, nullable=False),
+    Column('processing_request_id', ForeignKey('processing_request.id'), primary_key=True, nullable=False, index=True)
+)
+
+
+class DataProductStorageMap(Base):
+    __tablename__ = 'data_product_storage_map'
+
+    id = Column(INTEGER(11), primary_key=True)
+    data_product_id = Column(ForeignKey('data_product.id'), nullable=False, index=True)
+    storage_device_id = Column(ForeignKey('storage_device.id'), nullable=False, index=True)
+    path = Column(String(1024), nullable=False, server_default=text("''"))
+    last_updated = Column(DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP"))
+
+    data_product = relationship('DataProduct')
+    storage_device = relationship('StorageDevice')
 
 
 class FileActionRequest(Base):
