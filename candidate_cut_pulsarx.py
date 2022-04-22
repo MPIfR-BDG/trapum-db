@@ -245,7 +245,7 @@ class TrapumCandidateSelector(object):
                     Target
                 ).filter(
                     ProcessingRequest.id.in_(prequests), 
-                    DataProduct.file_type_id == 35,
+                    DataProduct.file_type_id.in_((35, 51))
                 ).all()
         log.info("Found {} tarballs for prequests: {}".format(
             len(tarballs), prequests))
