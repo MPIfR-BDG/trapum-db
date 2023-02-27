@@ -185,7 +185,7 @@ class Processing(Base):
     arguments = relationship('ProcessingArgument')
     hardware = relationship('Hardware')
     pipeline = relationship('Pipeline')
-    processing_request = relationship('ProcessingRequest', secondary=t_processing_request_processings) 
+    processing_request = relationship('ProcessingRequest', secondary='processing_request_processings') 
 
 class ProcessingRequest(Base):
     __tablename__ = 'processing_request'
@@ -221,13 +221,6 @@ t_memberships = Table(
     'memberships', metadata,
     Column('user_id', ForeignKey('user.id'), primary_key=True, nullable=False),
     Column('working_group_id', ForeignKey('working_group.id'), primary_key=True, nullable=False, index=True)
-)
-
-
-t_processing_request_processings = Table(
-    'processing_request_processings', metadata,
-    Column('processing_id', ForeignKey('processing.id'), primary_key=True, nullable=False),
-    Column('processing_request_id', ForeignKey('processing_request.id'), primary_key=True, nullable=False, index=True)
 )
 
 
